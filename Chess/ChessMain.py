@@ -1,9 +1,11 @@
 import pygame as p
 import ChessEngine, SmartMoveFinder
 
-WIDTH = HEIGHT = 512
+BOARD_WIDTH = BOARD_HEIGHT = 512
+MOVE_LOG_PANEL_WIDTH = 250
+MOVE_LOG_PANEL_HEIGHT = BOARD_HEIGHT
 DIMENSION = 8
-SQ_SIZE = HEIGHT // DIMENSION
+SQ_SIZE = BOARD_HEIGHT // DIMENSION
 MAX_FPS = 15
 IMAGES = {}
 
@@ -14,9 +16,10 @@ def loadImages():
 
 def main():
     p.init()
-    screen = p.display.set_mode((WIDTH, HEIGHT))
+    screen = p.display.set_mode((BOARD_WIDTH + MOVE_LOG_PANEL_WIDTH, BOARD_HEIGHT))
     clock = p.time.Clock()
     screen.fill(p.Color("white"))
+    moveLogFont = p.font.SysFont("Arial", 14, False, False)
     gs = ChessEngine.GameState()
     validMoves = gs.getValidMoves()
     moveMade = False #flag var for when a move is made
@@ -26,8 +29,8 @@ def main():
     sqSelected = ()
     playerClicks = []
     gameOver = False
-    playerOne = True #if a human is playing white then true. if an ai is playing then false
-    playerTwo = True #same as above but for black
+    playerOne = False #if a human is playing white then true. if an ai is playing then false
+    playerTwo = False #same as above but for black
     while running:
         humanTurn = (gs.whiteToMove and playerOne) or (not gs.whiteToMove and playerTwo)
         for e in p.event.get():
@@ -38,7 +41,7 @@ def main():
                     location = p.mouse.get_pos()
                     col = location[0]//SQ_SIZE
                     row = location[1]//SQ_SIZE
-                    if sqSelected == (row, col):
+                    if sqSelected == (row, col) or col >= 8:
                         sqSelected = ()
                         playerClicks = []
                     else:
@@ -90,19 +93,34 @@ def main():
             validMoves = gs.getValidMoves()
             moveMade = False
             animate = False
-        drawGameState(screen, gs, validMoves, sqSelected)
-        if gs.checkMate:
+        drawGameState(screen, gs, validMoves, sqSelected, moveLogFont)
+        if gs.checkMate or gs.staleMate:
             gameOver = True
-            if gs.whiteToMove:
-                drawText(screen, 'Black wins by checkmate')
+            if gs.staleMate:
+                text = 'Stalemate'
             else:
-                drawText(screen, 'White wins by checkmate')
-        elif gs.staleMate:
-            gameOver = True
-            drawText(screen, 'Stalemate')
+                text = 'Black wins by checkmate' if gs.whiteToMove else 'White wins by checkmate'
+            drawEndGameText(screen, text)
+
+
         clock.tick(MAX_FPS)
         p.display.flip()
 
+def drawGameState(screen, gs, validMoves, sqSelected, moveLogFont):
+    drawBoard(screen, gs.board) #draw square on board
+    highlightSquares(screen, gs, validMoves, sqSelected)
+    drawPieces(screen, gs.board) #draw pieces on top of squares
+    drawMoveLog(screen, gs, moveLogFont)
+def drawBoard(screen, board):
+    global colors
+    colors = [p.Color("white"), p.Color("grey")]
+    for r in range(DIMENSION):
+        for c in range(DIMENSION):
+            color = colors[((r+c)%2)]
+            p.draw.rect(screen, color, p.Rect(c*SQ_SIZE, r*SQ_SIZE, SQ_SIZE, SQ_SIZE))
+            piece = board[r][c]
+            if piece != "--":
+                screen.blit(IMAGES[piece], p.Rect(c * SQ_SIZE, r * SQ_SIZE, SQ_SIZE, SQ_SIZE))
 
 
 #highlight squares selected and move for the piece selected
@@ -122,30 +140,39 @@ def highlightSquares(screen, gs, validMoves, sqSelected):
                     screen.blit(s, (SQ_SIZE*move.endCol, SQ_SIZE*move.endRow))
 
 
-
-
-def drawGameState(screen, gs, validMoves, sqSelected):
-    drawBoard(screen, gs.board) #draw square on board
-    highlightSquares(screen, gs, validMoves, sqSelected)
-    drawPieces(screen, gs.board) #draw pieces on top of squares
-
-def drawBoard(screen, board):
-    global colors
-    colors = [p.Color("white"), p.Color("grey")]
-    for r in range(DIMENSION):
-        for c in range(DIMENSION):
-            color = colors[((r+c)%2)]
-            p.draw.rect(screen, color, p.Rect(c*SQ_SIZE, r*SQ_SIZE, SQ_SIZE, SQ_SIZE))
-            piece = board[r][c]
-            if piece != "--":
-                screen.blit(IMAGES[piece], p.Rect(c * SQ_SIZE, r * SQ_SIZE, SQ_SIZE, SQ_SIZE))
-
 def drawPieces(screen, board):
     for r in range(DIMENSION):
         for c in range(DIMENSION):
             piece = board[r][c]
             if piece != "--":
                 screen.blit(IMAGES[piece], p.Rect(c*SQ_SIZE, r*SQ_SIZE, SQ_SIZE, SQ_SIZE))
+
+
+#draw the move log
+def drawMoveLog(screen, gs, font):
+    moveLogRect = p.Rect(BOARD_WIDTH, 0, MOVE_LOG_PANEL_WIDTH, MOVE_LOG_PANEL_HEIGHT)
+    p.draw.rect(screen, p.Color("black"), moveLogRect)
+    moveLog = gs.moveLog
+    moveTexts = []
+    for i in range(0, len(moveLog), 2):
+        moveString = str(i//2 + 1) + ".  " + str(moveLog[i]) + " "
+        if i+1 < len(moveLog): #makes sure black made a move
+            moveString += str(moveLog[i+1]) + "  "
+        moveTexts.append(moveString)
+    movesPerRow = 3
+    padding = 5
+    lineSpacing = 2
+    textY = padding
+    for i in range(0, len(moveTexts), movesPerRow):
+        text = ""
+        for j in range(movesPerRow):
+            if i + j < len(moveTexts):
+                text += moveTexts[i+j]
+
+        textObject = font.render(text, True, p.Color('white'))
+        textLocation = moveLogRect.move(padding, textY)
+        screen.blit(textObject, textLocation)
+        textY += textObject.get_height() + lineSpacing
 
 #animate move
 def animateMove(move, screen, board, clock):
@@ -164,16 +191,19 @@ def animateMove(move, screen, board, clock):
         p.draw.rect(screen, color, endSquare)
         #draw capture piece onto rectangle
         if move.pieceCaptured != '--':
+            if move.isEnpassantMove:
+                enPassantRow = (move.endRow + 1) if move.pieceCaptured[0] == 'b' else move.endRow - 1
+                endSquare = p.Rect(move.endCol * SQ_SIZE, enPassantRow * SQ_SIZE, SQ_SIZE, SQ_SIZE)
             screen.blit(IMAGES[move.pieceCaptured], endSquare)
         #draw moving piece
         screen.blit(IMAGES[move.pieceMoved], p.Rect(c*SQ_SIZE, r*SQ_SIZE, SQ_SIZE, SQ_SIZE))
         p.display.flip()
         clock.tick(60)
 
-def drawText(screen, text):
+def drawEndGameText(screen, text):
     font = p.font.SysFont("Helvitce", 32, True, False)
     textObject = font.render(text, 0, p.Color('Gray'))
-    textLocation = p.Rect(0,0, WIDTH, HEIGHT).move(WIDTH/2 - textObject.get_width()/2, HEIGHT/2 - textObject.get_height()/2)
+    textLocation = p.Rect(0, 0, BOARD_WIDTH, BOARD_HEIGHT).move(BOARD_WIDTH / 2 - textObject.get_width() / 2, BOARD_HEIGHT / 2 - textObject.get_height() / 2)
     screen.blit(textObject, textLocation)
     textObject = font.render(text, 0, p.Color("Yellow"))
     screen.blit(textObject, textLocation.move(2, 2))
